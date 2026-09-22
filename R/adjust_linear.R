@@ -103,6 +103,7 @@ step_adjust_linear <- function(
     recipe,
     step_adjust_linear_new(
       terms = enquos(...),
+      role = role,
       trained = trained,
       remove_vars = remove_vars,
       keep_vars = keep_vars,
@@ -117,6 +118,7 @@ step_adjust_linear <- function(
 
 step_adjust_linear_new <- function(
   terms,
+  role,
   trained,
   remove_vars,
   keep_vars,
@@ -129,6 +131,7 @@ step_adjust_linear_new <- function(
   step(
     subclass = "adjust_linear",
     terms = terms,
+    role = role,
     trained = trained,
     remove_vars = remove_vars,
     keep_vars = keep_vars,
@@ -141,7 +144,7 @@ step_adjust_linear_new <- function(
 }
 
 #' @export
-prep.step_adjust_linear <- function(x, training, info = NULL) {
+prep.step_adjust_linear <- function(x, training, info = NULL, ...) {
   wts <- get_case_weights(info, training)
   were_weights_used <- are_weights_used(wts)
   if (isFALSE(were_weights_used)) {
@@ -180,9 +183,9 @@ prep.step_adjust_linear <- function(x, training, info = NULL) {
 
   for (ic in c(remove_names, keep_names)) {
     if (is.factor(training[[ic]])) {
-      training[[ic]] <- stats::C(droplevels(training[[ic]]), contr.sum)
+      training[[ic]] <- stats::C(droplevels(training[[ic]]), stats::contr.sum)
     } else if (is.numeric(training[[ic]])) {
-      training[[ic]] <- scale(training[[ic]], scale = FALSE)
+      training[[ic]] <- as.numeric(scale(training[[ic]], scale = FALSE))
     } else {
       cli::cli_abort(
         c(
@@ -198,21 +201,20 @@ prep.step_adjust_linear <- function(x, training, info = NULL) {
   for (col in col_names) {
     # Create formula: Target ~ Remove1 + Keep1 + ...
     # We combine both sets of variables for the fit
-    ff <- reformulate(
+    ff <- stats::reformulate(
       response = col,
       termlabels = c(remove_names, keep_names)
     )
 
     # Fit and store the model
-    model_list[[col]] <- butcher::butcher(
-      stats::lm(ff, data = training, weights = wts)
-    )
+    model_list[[col]] <- stats::lm(ff, data = training, weights = wts)
   }
 
   drop <- match.arg(x$drop, choices = c("remove", "both", "none"))
 
   step_adjust_linear_new(
     terms = col_names,
+    role = x$role,
     trained = TRUE,
     remove_vars = remove_names,
     keep_vars = keep_names,
@@ -226,10 +228,14 @@ prep.step_adjust_linear <- function(x, training, info = NULL) {
 
 #' @export
 bake.step_adjust_linear <- function(object, new_data, ...) {
-  # Get names of the variables we want to remove effects for
-  # We need to re-evaluate the selector to get string names
-  remove_names <- names(object$remove_vars)
-  keep_names <- names(object$keep_vars)
+  remove_names <- object$remove_vars
+  keep_names <- object$keep_vars
+
+  check_new_data(
+    unique(c(names(object$models), remove_names, keep_names)),
+    object,
+    new_data
+  )
 
   for (col in names(object$models)) {
     model <- object$models[[col]]
@@ -291,8 +297,18 @@ print.step_adjust_linear <- function(
 #' @usage NULL
 #' @export
 tidy.step_adjust_linear <- function(x, ...) {
-  remove_vars <- sel2char(x$remove_vars)
-  keep_vars <- sel2char(x$keep_vars)
+  to_chr <- function(y) {
+    if (is.null(y)) {
+      character(0)
+    } else if (is.character(y)) {
+      y
+    } else {
+      sel2char(y)
+    }
+  }
+
+  remove_vars <- to_chr(x$remove_vars)
+  keep_vars <- to_chr(x$keep_vars)
 
   if (is_trained(x)) {
     res <- purrr::map(x$models, \(mod) {
@@ -304,7 +320,7 @@ tidy.step_adjust_linear <- function(x, ...) {
     }) |>
       dplyr::bind_rows(.id = "variables")
   } else {
-    term_names <- sel2char(x$terms)
+    term_names <- to_chr(x$terms)
     res <- as_tibble(
       expand.grid(
         variables = term_names,
@@ -321,4 +337,10 @@ tidy.step_adjust_linear <- function(x, ...) {
   res <- res[order(res$variables), ]
   res$id <- x$id
   res
+}
+
+#' @rdname required_pkgs.embed
+#' @export
+required_pkgs.step_adjust_linear <- function(x, ...) {
+  c("embed")
 }
