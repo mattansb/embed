@@ -265,7 +265,7 @@ bake.step_adjust_linear <- function(object, new_data, ...) {
     # Identify which columns in the term matrix correspond to our `remove_vars`
     # Note: `predict` names columns by the variable name.
     cols_to_subtract <-
-      gsub("scale\\((.*), scale = FALSE\\)", "\\1", colnames(term_preds)) %in%
+      gsub("^scale\\((.*), scale = FALSE\\)$", "\\1", colnames(term_preds)) %in%
       remove_names
 
     if (any(cols_to_subtract)) {
@@ -333,7 +333,7 @@ tidy.step_adjust_linear <- function(x, ...) {
       a <- attr(stats::model.matrix(mod), "assign")
       a[a == 0] <- NA
       trm <- attr(stats::terms(mod), "term.labels")
-      trm <- gsub("scale\\((.*), scale = FALSE\\)", "\\1", trm)
+      trm <- gsub("^scale\\((.*), scale = FALSE\\)$", "\\1", trm)
       b <- stats::coef(mod)
       tibble(term = names(b), type = trm[a], value = b)
     }) |>
