@@ -1,6 +1,67 @@
 rlang::local_options(lifecycle_verbosity = "quiet")
 
-test_that("step_adjust_linear basic behavior and drop options", {
+test_that("step_adjust_linear adjusts (simple)", {
+  dat <- tibble::tibble(
+    y = 10:15,
+    batch = c(0, 0, 1, 1, 2, 2)
+  )
+
+  rec <- recipe(y ~ ., data = dat) |>
+    step_adjust_linear(y, remove_vars = vars(batch)) |>
+    prep(training = dat)
+
+  baked <- bake(rec, new_data = dat)
+  expect_identical(names(baked), "y")
+  expect_equal(unname(baked$y), rep(c(12, 13), times = 3), tolerance = 1e-6)
+})
+
+test_that("step_adjust_linear adjusts (complex)", {
+  data(mtcars)
+  mtcars$cyl <- factor(mtcars$cyl)
+
+  rec <- recipe(~., data = mtcars) |>
+    step_adjust_linear(
+      mpg,
+      remove_vars = vars(cyl, wt, hp),
+      keep_vars = vars(am)
+    ) |>
+    prep(training = mtcars)
+
+  baked <- bake(rec, new_data = mtcars)
+
+  mtcars_centered <- mtcars
+  mtcars_centered[, c("wt", "hp", "am")] <-
+    scale(
+      mtcars[, c("wt", "hp", "am")],
+      scale = FALSE
+    )
+
+  mod1 <- lm(
+    mpg ~ cyl + wt + hp + am,
+    contrasts = list(cyl = "contr.sum"),
+    data = mtcars_centered
+  )
+
+  expect_identical(
+    coef(rec$steps[[1]]$models$mpg),
+    coef(mod1),
+    ignore_attr = TRUE
+  )
+
+  expect_identical(
+    baked$mpg,
+    mtcars$mpg -
+      rowSums(predict(
+        mod1,
+        newdata = mtcars_centered,
+        type = "terms"
+      )[, 1:3]),
+
+    ignore_attr = TRUE
+  )
+})
+
+test_that("step_adjust_linear basic drop options", {
   dat <- tibble::tibble(
     y = c(10, 12, 14, 16, 18, 20),
     z = c(5, 6, 7, 8, 9, 10),

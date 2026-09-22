@@ -181,19 +181,30 @@ prep.step_adjust_linear <- function(x, training, info = NULL, ...) {
     keep_names <- NULL
   }
 
-  for (ic in c(remove_names, keep_names)) {
-    if (is.factor(training[[ic]])) {
-      training[[ic]] <- stats::C(droplevels(training[[ic]]), stats::contr.sum)
-    } else if (is.numeric(training[[ic]])) {
-      training[[ic]] <- as.numeric(scale(training[[ic]], scale = FALSE))
-    } else {
-      cli::cli_abort(
-        c(
-          "The `remove_vars` and `keep_vars` selectors must be either factors or numeric.",
-          "x" = "The following variable is neither: {ic}"
-        )
+  .contrasts <- NULL
+  all_names <- c(remove_names, keep_names)
+  is_fct <- purrr::map_lgl(all_names, \(v) is.factor(training[[v]]))
+  is_num <- purrr::map_lgl(all_names, \(v) is.numeric(training[[v]]))
+  other_names <- all_names[!(is_fct | is_num)]
+
+  if (length(other_names) > 0L) {
+    cli::cli_abort(
+      c(
+        "The `remove_vars` and `keep_vars` selectors must be either factors or numeric.",
+        "x" = "The following variable is neither: {other_names}"
       )
-    }
+    )
+  }
+
+  if (any(is_num)) {
+    all_names[is_num] <- sprintf("scale(%s, scale = FALSE)", all_names[is_num])
+  }
+
+  if (any(is_fct)) {
+    .contrasts <- stats::setNames(
+      rep(list("contr.sum"), sum(is_fct)),
+      all_names[is_fct]
+    )
   }
 
   model_list <- list()
@@ -203,11 +214,16 @@ prep.step_adjust_linear <- function(x, training, info = NULL, ...) {
     # We combine both sets of variables for the fit
     ff <- stats::reformulate(
       response = col,
-      termlabels = c(remove_names, keep_names)
+      termlabels = all_names
     )
 
     # Fit and store the model
-    model_list[[col]] <- stats::lm(ff, data = training, weights = wts)
+    model_list[[col]] <- stats::lm(
+      ff,
+      data = training,
+      weights = wts,
+      contrasts = .contrasts
+    )
   }
 
   drop <- match.arg(x$drop, choices = c("remove", "both", "none"))
@@ -248,9 +264,11 @@ bake.step_adjust_linear <- function(object, new_data, ...) {
 
     # Identify which columns in the term matrix correspond to our `remove_vars`
     # Note: `predict` names columns by the variable name.
-    cols_to_subtract <- intersect(colnames(term_preds), remove_names)
+    cols_to_subtract <-
+      gsub("scale\\((.*), scale = FALSE\\)", "\\1", colnames(term_preds)) %in%
+      remove_names
 
-    if (length(cols_to_subtract) > 0) {
+    if (any(cols_to_subtract)) {
       # Sum the effects of the nuisance variables
       nuisance_effect <- rowSums(term_preds[, cols_to_subtract, drop = FALSE])
 
@@ -315,6 +333,7 @@ tidy.step_adjust_linear <- function(x, ...) {
       a <- attr(stats::model.matrix(mod), "assign")
       a[a == 0] <- NA
       trm <- attr(stats::terms(mod), "term.labels")
+      trm <- gsub("scale\\((.*), scale = FALSE\\)", "\\1", trm)
       b <- stats::coef(mod)
       tibble(term = names(b), type = trm[a], value = b)
     }) |>
@@ -325,11 +344,11 @@ tidy.step_adjust_linear <- function(x, ...) {
       expand.grid(
         variables = term_names,
         term = c(remove_vars, keep_vars),
-        type = c(remove_vars, keep_vars),
-        value = NA_real_,
         stringsAsFactors = FALSE
       )
     )
+    res$type <- res$term
+    res$value <- NA_real_
   }
 
   res$type[res$type %in% remove_vars] <- "remove"
